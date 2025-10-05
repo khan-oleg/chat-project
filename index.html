@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Simple Chat with Audio (Final)</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --accent:#60a5fa; --muted:#9aa6b2; --bubble:#112031;
+    --me-gradient-start:#063c6f; --me-gradient-end:#0b5aa3;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+  body{background:linear-gradient(180deg,#071021 0%, #07182a 100%);display:flex;align-items:center;justify-content:center;padding:20px;color:#e6eef6}
+  .app{width:420px;max-width:100%;background:var(--card);border-radius:12px;box-shadow:0 6px 30px rgba(2,6,23,.6);overflow:hidden;display:flex;flex-direction:column}
+  header{padding:14px 16px;border-bottom:1px solid rgba(255,255,255,.03);display:flex;align-items:center;gap:12px}
+  header h1{font-size:15px;margin:0}
+  .messages{padding:14px;flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;background:linear-gradient(0deg, rgba(255,255,255,0.01), transparent)}
+  .msg{max-width:85%;padding:10px 12px;border-radius:10px;background:var(--bubble);box-shadow:inset 0 -1px 0 rgba(255,255,255,0.02);align-self:flex-start}
+  .msg.me{align-self:flex-end;background:linear-gradient(180deg,var(--me-gradient-start),var(--me-gradient-end));color:white}
+  .meta{font-size:11px;color:var(--muted);margin-bottom:6px}
+  .controls{display:flex;gap:8px;padding:10px;border-top:1px solid rgba(255,255,255,.03);align-items:center}
+  .input{flex:1;display:flex;gap:8px}
+  input[type="text"]{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,.04);background:transparent;color:inherit;outline:none}
+  button{background:var(--accent);border:none;color:#04253b;padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+  .mic{background:transparent;border:1px solid rgba(255,255,255,.06);padding:8px;border-radius:8px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:8px}
+  .mic.recording { box-shadow:0 6px 18px rgba(5,100,150,0.18); border-color: rgba(255,89,100,0.9); color:#fff }
+  .rec-dot{width:10px;height:10px;border-radius:50%;background:#ff5964;display:inline-block;margin-left:4px;vertical-align:middle;animation:blink 1s linear infinite}
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:.2}}
+  audio{width:100%;outline:none;margin-top:6px;border-radius:6px}
+  .hint{font-size:12px;color:var(--muted);padding:8px;text-align:center}
+  .timer { font-weight:700; font-size:13px; color:var(--muted); min-width:54px; text-align:right }
+  .controls .input button { background: linear-gradient(180deg,#7fc6ff,#60a5fa); color:#04253b }
+  .small-btn { padding:6px 8px; border-radius:6px; background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.03); cursor:pointer; color:var(--muted) }
+  .saved-badge { font-size:12px;color:var(--muted);padding:0 8px }
+  .footer-note{font-size:11px;color:var(--muted);padding:8px;text-align:center;border-top:1px solid rgba(255,255,255,0.02)}
+  *{box-sizing:border-box}
+  .messages{ padding-bottom: 96px; }
+  .controls{ display:flex; flex-wrap:wrap; gap:8px; padding:10px; align-items:center; }
+  .input{ flex:1 1 auto; min-width:0; display:flex; gap:8px; align-items:center; }
+  input[type="text"]{ width:100%; min-width:0; padding:9px; }
+  .mic, .small-btn, .input button, button { padding:8px 10px; white-space:nowrap; }
+  .timer{ min-width:48px; text-align:right; font-size:13px }
+  @media (max-width:420px){ .app{ width:calc(100% - 32px); } header h1{ font-size:14px } .meta{ font-size:10px } .controls{ gap:6px; } .mic, .small-btn, .input button { padding:6px 8px; font-size:13px } .rec-dot{ width:8px; height:8px } }
+</style>
+</head>
+<body>
+  <div class="app" role="application" aria-label="Polished chat with audio">
+    <header>
+      <div style="flex:1">
+        <h1>Mock Chat — audio + text (final)</h1>
+        <div class="hint">Запись через микрофон, автосейв в localStorage, ограничение 60s</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+        <div class="saved-badge" id="savedBadge">—</div>
+      </div>
+    </header>
+
+    <div id="messages" class="messages" aria-live="polite"></div>
+
+    <div class="controls">
+      <div class="input">
+        <input id="textInput" type="text" placeholder="Напиши сообщение..." aria-label="Текстовое сообщение" />
+        <button id="sendBtn">Send</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px">
+        <div class="timer" id="recTimer">00:00</div>
+        <button id="micBtn" class="mic" title="Record voice (click to start/stop)">🎤</button>
+        <button id="clearBtn" class="small-btn" title="Очистить чат">Clear</button>
+      </div>
+    </div>
+
+    <div class="footer-note">Откройте на <strong>localhost</strong> или через HTTPS. Для iframe: <code>allow="microphone; autoplay"</code></div>
+  </div>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'simple_chat_v1_final'
+  const messagesEl = document.getElementById('messages')
+  const textInput = document.getElementById('textInput')
+  const sendBtn = document.getElementById('sendBtn')
+  const micBtn = document.getElementById('micBtn')
+  const recTimerEl = document.getElementById('recTimer')
+  const savedBadge = document.getElementById('savedBadge')
+  const clearBtn = document.getElementById('clearBtn')
+
+  let messages = [] // {id,type:'text'|'audio', text?, dataUrl?, me:boolean, ts:number}
+  let mediaRecorder = null
+  let currentStream = null
+  let recordingChunks = []
+  let isRecording = false
+  let recInterval = null
+  let recSeconds = 0
+  const MAX_RECORD_SECONDS = 60
+
+  /* ---------- UTIL ---------- */
+  function formatTime(s) { const mm = String(Math.floor(s/60)).padStart(2,'0'); const ss = String(s%60).padStart(2,'0'); return `${mm}:${ss}` }
+  function setTimerDisplay(sec) { recTimerEl.textContent = formatTime(sec) }
+
+  function saveMessages() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages))
+      const t = new Date()
+      savedBadge.textContent = 'Сохранено локально • ' + t.toLocaleTimeString()
+    } catch (e) {
+      console.warn('Save failed', e)
+      savedBadge.textContent = 'Ошибка сохранения'
+    }
+  }
+  function loadMessages() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) messages = parsed
+    } catch (e) { console.warn('Load failed', e) }
+  }
+  function clearStorageAndUI() { messages = []; localStorage.removeItem(STORAGE_KEY); messagesEl.innerHTML = ''; savedBadge.textContent = 'Очищено' }
+
+  /* ---------- RENDER ---------- */
+  function appendMessage(m) {
+    const el = document.createElement('div')
+    el.className = 'msg' + (m.me ? ' me' : '')
+    if (m.type === 'text') {
+      const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${m.me ? 'You' : 'Bot'} • ${new Date(m.ts).toLocaleTimeString()}`
+      const txt = document.createElement('div'); txt.textContent = m.text
+      el.appendChild(meta); el.appendChild(txt)
+    } else if (m.type === 'audio') {
+      const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${m.me ? 'You (audio)' : 'Bot (audio)'} • ${new Date(m.ts).toLocaleTimeString()}`
+      el.appendChild(meta)
+      const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = m.dataUrl; audio.setAttribute('playsinline','')
+      el.appendChild(audio)
+    }
+    messagesEl.appendChild(el)
+    el.scrollIntoView({behavior:'smooth', block:'end'})
+  }
+
+  function renderAllFromState() {
+    messagesEl.innerHTML = ''
+    for (const m of messages) appendMessage(m)
+    // ensure viewport at last message
+    requestAnimationFrame(() => { const last = messagesEl.lastElementChild; if (last) last.scrollIntoView({behavior:'auto', block:'end'}) })
+  }
+
+  /* ---------- MESSAGES ---------- */
+  function addMessage(obj, autoReply=true) {
+    const m = Object.assign({ id: Date.now()+Math.random(), ts: Date.now() }, obj)
+    messages.push(m); appendMessage(m); saveMessages()
+    if (m.me && autoReply) {
+      // simple mock reply: text for text, short tone for audio
+      setTimeout(() => generateMockReply(m.type), 700)
+    }
+  }
+
+  function addTextMessage(text, me=true) { addMessage({ type:'text', text, me }) }
+
+  function addAudioMessageFromBlob(blob, me=true) {
+    blobToDataURL(blob).then(dataUrl => addMessage({ type:'audio', dataUrl, me }))
+    .catch(err => console.error('blob->dataURL failed', err))
+  }
+
+  function blobToDataURL(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) }) }
+
+  async function generateMockAudio(duration = 700) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const dest = ctx.createMediaStreamDestination()
+    const osc = ctx.createOscillator(); osc.type = 'sine'; osc.frequency.value = 600
+    osc.connect(dest); osc.start()
+    const recorder = new MediaRecorder(dest.stream)
+    const chunks = []
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data) }
+    recorder.start()
+    await new Promise(r => setTimeout(r, duration))
+    recorder.stop(); osc.stop()
+    await new Promise(res => recorder.onstop = res)
+    try { ctx.close() } catch(e){}
+    return new Blob(chunks, { type: 'audio/webm' })
+  }
+
+  async function generateMockReply(inputType) {
+    try {
+      if (inputType === 'audio') {
+        const b = await generateMockAudio(800)
+        addAudioMessageFromBlob(b, false)
+      } else {
+        const preset = [
+          'Принято: "' + (messages[messages.length-1]?.text || '') + '"',
+          'Хорошо, записал.',
+          'Понял, спасибо.'
+        ]
+        const txt = preset[Math.floor(Math.random()*preset.length)]
+        addTextMessage(txt, false)
+      }
+    } catch (e) { console.warn('mock reply failed', e) }
+  }
+
+  /* ---------- RECORDING ---------- */
+  async function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Ваш браузер не поддерживает запись.'); return }
+    try {
+      currentStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaRecorder = new MediaRecorder(currentStream)
+      recordingChunks = []
+      mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recordingChunks.push(e.data) }
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(recordingChunks, { type: 'audio/webm' })
+        try { currentStream.getTracks().forEach(t => t.stop()) } catch(e){}
+        currentStream = null
+        addAudioMessageFromBlob(blob, true)
+      }
+      mediaRecorder.start()
+      isRecording = true
+      startTimer()
+      updateMicUI()
+      // safety fallback auto-stop
+      setTimeout(() => { if (isRecording) stopRecording() }, (MAX_RECORD_SECONDS+1)*1000)
+    } catch (err) { console.error('getUserMedia error', err); alert('Не удалось получить доступ к микрофону: ' + (err && err.message ? err.message : err)) }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop()
+    if (currentStream) try { currentStream.getTracks().forEach(t => t.stop()) } catch(e){}
+    isRecording = false
+    stopTimer()
+    updateMicUI()
+  }
+
+  function startTimer() { recSeconds = 0; setTimerDisplay(recSeconds); recInterval = setInterval(() => { recSeconds++; setTimerDisplay(recSeconds); if (recSeconds >= MAX_RECORD_SECONDS) stopRecording() }, 1000) }
+  function stopTimer() { if (recInterval) { clearInterval(recInterval); recInterval = null } recSeconds = 0; setTimerDisplay(0) }
+
+  function updateMicUI() { micBtn.innerHTML = isRecording ? `⏹ Stop <span class="rec-dot"></span>` : '🎤'; micBtn.classList.toggle('recording', isRecording) }
+
+  /* ---------- EVENTS ---------- */
+  sendBtn.addEventListener('click', () => { const v = textInput.value.trim(); if (!v) return; addTextMessage(v, true); textInput.value = '' })
+  textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click() })
+  micBtn.addEventListener('click', () => { if (isRecording) stopRecording(); else startRecording() })
+  clearBtn.addEventListener('click', () => { if (!confirm('Очистить чат и удалить локальное сохранение?')) return; clearStorageAndUI() })
+
+  /* ---------- INIT ---------- */
+  (async function init() {
+    loadMessages()
+    if (messages.length > 0) {
+      renderAllFromState()
+    } else {
+      messages.push({ id: Date.now()+Math.random(), type:'text', text:'Привет! Это тестовый чат с аудио.', me:false, ts: Date.now() })
+      try { const b = await generateMockAudio(900); await new Promise(r => setTimeout(r, 160)); addAudioMessageFromBlob(b, false) } catch(e){}
+      renderAllFromState()
+      saveMessages()
+    }
+
+    if (typeof MediaRecorder === 'undefined' || typeof navigator.mediaDevices === 'undefined') {
+      micBtn.style.display = 'none'
+      const hint = document.createElement('div'); hint.className='hint'; hint.textContent='Запись недоступна в этом браузере'
+      document.querySelector('header').appendChild(hint)
+    }
+  })()
+
+})();
+</script>
+</body>
+</html>
