@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Simple Chat with Audio (Final)</title>
+<title>Simple Chat with Audio (Final + Upload)</title>
 <style>
   :root{
     --bg:#0f1724; --card:#0b1220; --accent:#60a5fa; --muted:#9aa6b2; --bubble:#112031;
@@ -40,15 +40,19 @@
   input[type="text"]{ width:100%; min-width:0; padding:9px; }
   .mic, .small-btn, .input button, button { padding:8px 10px; white-space:nowrap; }
   .timer{ min-width:48px; text-align:right; font-size:13px }
+  .upload-btn { padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:var(--muted); cursor:pointer }
+  .filename { font-size:11px; color:var(--muted); margin-top:6px; }
   @media (max-width:420px){ .app{ width:calc(100% - 32px); } header h1{ font-size:14px } .meta{ font-size:10px } .controls{ gap:6px; } .mic, .small-btn, .input button { padding:6px 8px; font-size:13px } .rec-dot{ width:8px; height:8px } }
+  /* hidden file input */
+  input[type="file"]{ display:none; }
 </style>
 </head>
 <body>
   <div class="app" role="application" aria-label="Polished chat with audio">
     <header>
       <div style="flex:1">
-        <h1>Mock Chat — audio + text </h1>
-        <div class="hint">Запись через микрофон, автосейв в localStorage, ограничение 60s</div>
+        <h1>Chat </h1>
+        <div class="hint">Запись через микрофон, автоcейв в localStorage, ограничение 60s.</div> 
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
         <div class="saved-badge" id="savedBadge">—</div>
@@ -66,6 +70,11 @@
       <div style="display:flex;align-items:center;gap:8px">
         <div class="timer" id="recTimer">00:00</div>
         <button id="micBtn" class="mic" title="Record voice (click to start/stop)">🎤</button>
+
+        <!-- Upload audio -->
+        <button id="uploadBtn" class="upload-btn" title="Upload audio file(s)">🎧 Upload</button>
+        <input id="fileInput" type="file" accept="audio/*" multiple aria-label="Upload audio files" />
+
         <button id="clearBtn" class="small-btn" title="Очистить чат">Clear</button>
       </div>
     </div>
@@ -75,7 +84,7 @@
 
 <script>
 (() => {
-  const STORAGE_KEY = 'simple_chat_v1_final'
+  const STORAGE_KEY = 'simple_chat_v1_final_with_upload'
   const messagesEl = document.getElementById('messages')
   const textInput = document.getElementById('textInput')
   const sendBtn = document.getElementById('sendBtn')
@@ -83,8 +92,10 @@
   const recTimerEl = document.getElementById('recTimer')
   const savedBadge = document.getElementById('savedBadge')
   const clearBtn = document.getElementById('clearBtn')
+  const uploadBtn = document.getElementById('uploadBtn')
+  const fileInput = document.getElementById('fileInput')
 
-  let messages = [] // {id,type:'text'|'audio', text?, dataUrl?, me:boolean, ts:number}
+  let messages = [] // {id,type:'text'|'audio', text?, dataUrl?, filename?, me:boolean, ts:number}
   let mediaRecorder = null
   let currentStream = null
   let recordingChunks = []
@@ -92,6 +103,7 @@
   let recInterval = null
   let recSeconds = 0
   const MAX_RECORD_SECONDS = 60
+  const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB limit per file (adjustable)
 
   /* ---------- UTIL ---------- */
   function formatTime(s) { const mm = String(Math.floor(s/60)).padStart(2,'0'); const ss = String(s%60).padStart(2,'0'); return `${mm}:${ss}` }
@@ -126,8 +138,14 @@
       const txt = document.createElement('div'); txt.textContent = m.text
       el.appendChild(meta); el.appendChild(txt)
     } else if (m.type === 'audio') {
-      const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${m.me ? 'You (audio)' : 'Bot (audio)'} • ${new Date(m.ts).toLocaleTimeString()}`
+      const meta = document.createElement('div'); meta.className = 'meta'
+      // include filename if available
+      meta.textContent = `${m.me ? 'You (audio)' : 'Bot (audio)'} • ${new Date(m.ts).toLocaleTimeString()}`
       el.appendChild(meta)
+      if (m.filename) {
+        const fn = document.createElement('div'); fn.className = 'filename'; fn.textContent = m.filename
+        el.appendChild(fn)
+      }
       const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = m.dataUrl; audio.setAttribute('playsinline','')
       el.appendChild(audio)
     }
@@ -154,9 +172,13 @@
 
   function addTextMessage(text, me=true) { addMessage({ type:'text', text, me }) }
 
-  function addAudioMessageFromBlob(blob, me=true) {
-    blobToDataURL(blob).then(dataUrl => addMessage({ type:'audio', dataUrl, me }))
+  function addAudioMessageFromBlob(blob, me=true, filename=null) {
+    blobToDataURL(blob).then(dataUrl => addMessage({ type:'audio', dataUrl, filename, me }))
     .catch(err => console.error('blob->dataURL failed', err))
+  }
+
+  function addAudioMessageFromDataUrl(dataUrl, filename=null, me=true) {
+    addMessage({ type:'audio', dataUrl, filename, me })
   }
 
   function blobToDataURL(blob) { return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) }) }
@@ -206,7 +228,7 @@
         const blob = new Blob(recordingChunks, { type: 'audio/webm' })
         try { currentStream.getTracks().forEach(t => t.stop()) } catch(e){}
         currentStream = null
-        addAudioMessageFromBlob(blob, true)
+        addAudioMessageFromBlob(blob, true, 'Recording.webm')
       }
       mediaRecorder.start()
       isRecording = true
@@ -230,11 +252,45 @@
 
   function updateMicUI() { micBtn.innerHTML = isRecording ? `⏹ Stop <span class="rec-dot"></span>` : '🎤'; micBtn.classList.toggle('recording', isRecording) }
 
+  /* ---------- UPLOAD HANDLING ---------- */
+  function handleFilesList(list) {
+    // list: FileList or array of File
+    const files = Array.from(list)
+    if (files.length === 0) return
+    for (const f of files) {
+      if (!f.type || !f.type.startsWith('audio/')) {
+        alert('Файл "' + f.name + '" не распознан как аудио. Пропускаю.')
+        continue
+      }
+      if (f.size > MAX_UPLOAD_BYTES) {
+        alert('Файл "' + f.name + '" слишком большой (макс ' + Math.round(MAX_UPLOAD_BYTES/1024/1024) + 'MB). Пропускаю.')
+        continue
+      }
+      const fr = new FileReader()
+      fr.onload = () => {
+        const dataUrl = fr.result
+        addAudioMessageFromDataUrl(dataUrl, f.name, true)
+      }
+      fr.onerror = () => {
+        console.error('FileReader error for', f.name)
+        alert('Не удалось прочитать файл: ' + f.name)
+      }
+      fr.readAsDataURL(f)
+    }
+    // clear input so same file can be selected again later
+    fileInput.value = ''
+  }
+
   /* ---------- EVENTS ---------- */
   sendBtn.addEventListener('click', () => { const v = textInput.value.trim(); if (!v) return; addTextMessage(v, true); textInput.value = '' })
   textInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click() })
   micBtn.addEventListener('click', () => { if (isRecording) stopRecording(); else startRecording() })
   clearBtn.addEventListener('click', () => { if (!confirm('Очистить чат и удалить локальное сохранение?')) return; clearStorageAndUI() })
+
+  uploadBtn.addEventListener('click', () => fileInput.click())
+  fileInput.addEventListener('change', (e) => {
+    handleFilesList(e.target.files)
+  })
 
   /* ---------- INIT ---------- */
   (async function init() {
@@ -243,7 +299,7 @@
       renderAllFromState()
     } else {
       messages.push({ id: Date.now()+Math.random(), type:'text', text:'Привет! Это тестовый чат с аудио.', me:false, ts: Date.now() })
-      try { const b = await generateMockAudio(900); await new Promise(r => setTimeout(r, 160)); addAudioMessageFromBlob(b, false) } catch(e){}
+      try { const b = await generateMockAudio(900); await new Promise(r => setTimeout(r, 160)); addAudioMessageFromBlob(b, false, 'welcome.webm') } catch(e){}
       renderAllFromState()
       saveMessages()
     }
@@ -251,6 +307,13 @@
     if (typeof MediaRecorder === 'undefined' || typeof navigator.mediaDevices === 'undefined') {
       micBtn.style.display = 'none'
       const hint = document.createElement('div'); hint.className='hint'; hint.textContent='Запись недоступна в этом браузере'
+      document.querySelector('header').appendChild(hint)
+    }
+
+    // feature: if file API is not available, hide upload
+    if (!window.File || !window.FileReader || !window.FileList) {
+      uploadBtn.style.display = 'none'
+      const hint = document.createElement('div'); hint.className='hint'; hint.textContent='Загрузка файлов недоступна в этом браузере'
       document.querySelector('header').appendChild(hint)
     }
   })()
